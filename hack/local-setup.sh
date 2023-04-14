@@ -145,6 +145,15 @@ installGatewayAPI() {
   ${KUSTOMIZE_BIN} build ${GATEWAY_API_KUSTOMIZATION_DIR} | kubectl apply -f -
 }
 
+deployOLM(){
+  clusterName=${1}
+  
+  kubectl config use-context kind-${clusterName}
+  echo "Installing OLM in ${clusterName}"
+  
+  ${OPERATOR_SDK_BIN} olm install
+}
+
 deployKuadrant(){
   clusterName=${1}
 
@@ -275,7 +284,7 @@ if [[ -n "${MCTC_WORKLOAD_CLUSTERS_COUNT}" ]]; then
     installGatewayAPI ${KIND_CLUSTER_WORKLOAD}-${i}
     deployIngressController ${KIND_CLUSTER_WORKLOAD}-${i}
     deployMetalLB ${KIND_CLUSTER_WORKLOAD}-${i} $((${metalLBSubnetStart} + ${i} - 1))
-    deployKuadrant ${KIND_CLUSTER_WORKLOAD}-${i}
+    deployOLM ${KIND_CLUSTER_WORKLOAD}-${i}
     deployWebhookConfigs ${KIND_CLUSTER_WORKLOAD}-${i}
     deployDashboard ${KIND_CLUSTER_WORKLOAD}-${i} ${i}
     argocdAddCluster ${KIND_CLUSTER_CONTROL_PLANE} ${KIND_CLUSTER_WORKLOAD}-${i}
