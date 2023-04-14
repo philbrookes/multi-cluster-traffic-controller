@@ -129,7 +129,7 @@ var _ = BeforeSuite(func() {
 		Scheme:       k8sManager.GetScheme(),
 		Certificates: certificates,
 		Host:         dns,
-	}).SetupWithManager(k8sManager)
+	}).SetupWithManager(k8sManager, ctx)
 	Expect(err).ToNot(HaveOccurred())
 
 	// TODO: can we avoid duplicate set code here that also in controller/main.go?

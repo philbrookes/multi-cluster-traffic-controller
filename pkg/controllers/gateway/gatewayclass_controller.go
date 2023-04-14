@@ -72,7 +72,7 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	gatewayclass := previous.DeepCopy()
 	supportedClasses := getSupportedClasses()
 
-	_, err = getParams(ctx, r.Client, previous)
+	_, err = getParams(ctx, r.Client, previous.Name)
 
 	if !slice.ContainsString(supportedClasses, previous.Name) {
 		gatewayclass.Status = gatewayv1beta1.GatewayClassStatus{

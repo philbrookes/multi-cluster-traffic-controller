@@ -84,7 +84,6 @@ func (r *ManagedZoneReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if !controllerutil.ContainsFinalizer(managedZone, ManagedZoneFinalizer) {
-		log.Log.Info("ManagedZoneReconciler Reconcile: Added finalizer and set parent zone owner", "managedZone", managedZone.Name)
 
 		controllerutil.AddFinalizer(managedZone, ManagedZoneFinalizer)
 
