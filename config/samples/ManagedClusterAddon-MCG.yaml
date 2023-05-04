@@ -1,0 +1,7 @@
+apiVersion: addon.open-cluster-management.io/v1alpha1
+kind: ManagedClusterAddOn
+metadata:
+  name: kuadrant-addon
+  namespace: kind-mctc-workload-1
+spec:
+  installNamespace: ocm-kuadrant-addon
