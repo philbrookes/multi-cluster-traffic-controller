@@ -51,6 +51,14 @@ spec:
   path: "..."
   protocol: "..."
   interval: "..."
+  AdditionalHeaders:
+  - Name: "..."
+    Value: "..."
+  ExpectedResponses:
+  - 201
+    200
+  - 301
+  AllowInsecureCertificate: bool
 status:
   healthy: true
   consecutiveFailures: 0
@@ -75,3 +83,27 @@ Instead of Route53 health checks, the controller will create `DNSHealthCheckProb
 #### DNSRecord controller
 
 Currently the reconciliation loop of this controller updates the DNS records using the aws/health-check-id provider specific field, that is updated as a result of the DNSPolicy reconciliation. The proposed change is to extend the functionality of acting on provider specific fields, to disable/enable the DNS record if the health-probe/healthy field is Unhealthy. This can be achieved by either deleting/re-creating the DNS record, or setting the weight to 0 in order to disable it
+
+## DNS Record Structure Diagram:
+
+https://lucid.app/lucidchart/2f95c9c9-8ddf-4609-af37-48145c02ef7f/edit?viewport_loc=-188%2C-61%2C2400%2C1183%2C0_0&invitationId=inv_d5f35eb7-16a9-40ec-b568-38556de9b568
+How
+
+## Removing unhealthy Endpoints
+When a DNS health check probe is failing, it will update the DNS Record CR with a custom field on that endpoint to mark it as failing.
+
+There are then 3 scenarios which we need to consider:
+1 - All endpoints are healthy
+2 - All endpoints are unhealthy
+3 - Some endpoints are healthy and some are unhealthy.
+
+In the cases 1 and 2, the result should be the same: All records are published to the DNS Provider.
+
+When scenario 3 is encountered the following process should be followed:
+
+    For each gateway IP or CNAME: this should be omitted if unhealthy.
+    For each managed gateway CNAME: This should be omitted if all child records are unhealthy.
+    For each GEO CNAME: This should be omitted if all the managed gateway CNAMEs have been omitted.
+    Load balancer CNAME: This should never be omitted.
+
+If we consider the DNS record to be a hierarchy of parents and children, then whenever any parent has no healthy children that parent is also considered unhealthy. No unhealthy elements are to be included in the DNS Record.
