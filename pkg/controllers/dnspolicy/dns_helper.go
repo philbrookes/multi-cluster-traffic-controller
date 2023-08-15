@@ -12,11 +12,13 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
+	"github.com/Kuadrant/multicluster-gateway-controller/pkg/_internal/metadata"
 	"github.com/Kuadrant/multicluster-gateway-controller/pkg/_internal/slice"
 	"github.com/Kuadrant/multicluster-gateway-controller/pkg/apis/v1alpha1"
 	"github.com/Kuadrant/multicluster-gateway-controller/pkg/dns"
@@ -167,7 +169,7 @@ func withDNSRecord[T metav1.Object](dnsRecord *v1alpha1.DNSRecord, obj T) T {
 // ab2.lb-a1b2.shop.example.com A 192.22.2.3
 // ab3.lb-a1b2.shop.example.com A 192.22.2.4
 
-func (dh *dnsHelper) setEndpoints(ctx context.Context, mcgTarget *dns.MultiClusterGatewayTarget, dnsRecord *v1alpha1.DNSRecord, listener gatewayv1beta1.Listener) error {
+func (dh *dnsHelper) setEndpoints(ctx context.Context, gateway *gatewayv1beta1.Gateway, mcgTarget *dns.MultiClusterGatewayTarget, dnsRecord *v1alpha1.DNSRecord, dnsPolicy *v1alpha1.DNSPolicy, listener gatewayv1beta1.Listener) error {
 
 	old := dnsRecord.DeepCopy()
 	gwListenerHost := string(*listener.Hostname)
@@ -235,6 +237,7 @@ func (dh *dnsHelper) setEndpoints(ctx context.Context, mcgTarget *dns.MultiClust
 		}
 
 		endpoint.SetProviderSpecific(dns.ProviderSpecificGeoCode, string(geoCode))
+
 		newEndpoints = append(newEndpoints, endpoint)
 	}
 
@@ -250,8 +253,31 @@ func (dh *dnsHelper) setEndpoints(ctx context.Context, mcgTarget *dns.MultiClust
 	sort.Slice(newEndpoints, func(i, j int) bool {
 		return newEndpoints[i].SetID() < newEndpoints[j].SetID()
 	})
-	dnsRecord.Spec.Endpoints = newEndpoints
 
+	probes, err := dh.getDNSHealthCheckProbes(ctx, gateway, dnsPolicy)
+	if err != nil {
+		return err
+	}
+
+	for i := 0; i < len(newEndpoints); i++ {
+		probe := dh.getProbeForEndpoint(newEndpoints[i], probes)
+		if probe != nil {
+			probeHealthy := true
+			if probe.Status.Healthy != nil {
+				probeHealthy = *probe.Status.Healthy
+			}
+			if !probeHealthy {
+				newEndpoints = append(newEndpoints[:i], newEndpoints[i+1:]...)
+				i--
+			}
+		}
+	}
+
+	if len(newEndpoints) == 0 {
+		dnsRecord.Spec.Endpoints = nil
+	} else {
+		dnsRecord.Spec.Endpoints = newEndpoints
+	}
 	if !equality.Semantic.DeepEqual(old, dnsRecord) {
 		return dh.Update(ctx, dnsRecord)
 	}
@@ -354,4 +380,26 @@ func (r *dnsHelper) deleteDNSRecordForListener(ctx context.Context, owner metav1
 
 func isWildCardListener(l gatewayv1beta1.Listener) bool {
 	return strings.HasPrefix(string(*l.Hostname), "*")
+}
+
+func (dh *dnsHelper) getDNSHealthCheckProbes(ctx context.Context, gateway *gatewayv1beta1.Gateway, dnsPolicy *v1alpha1.DNSPolicy) ([]*v1alpha1.DNSHealthCheckProbe, error) {
+	list := &v1alpha1.DNSHealthCheckProbeList{}
+	if err := dh.List(ctx, list, &client.ListOptions{
+		LabelSelector: labels.SelectorFromSet(commonDNSRecordLabels(client.ObjectKeyFromObject(gateway), client.ObjectKeyFromObject(dnsPolicy))),
+	}); err != nil {
+		return nil, err
+	}
+
+	return slice.MapErr(list.Items, func(obj v1alpha1.DNSHealthCheckProbe) (*v1alpha1.DNSHealthCheckProbe, error) {
+		return &obj, nil
+	})
+}
+
+func (dh *dnsHelper) getProbeForEndpoint(endpoint *v1alpha1.Endpoint, probes []*v1alpha1.DNSHealthCheckProbe) *v1alpha1.DNSHealthCheckProbe {
+	for _, probe := range probes {
+		if metadata.GetAnnotation(probe, AnnotationHealthCheckProbeEndpointName) == endpoint.DNSName {
+			return probe
+		}
+	}
+	return nil
 }

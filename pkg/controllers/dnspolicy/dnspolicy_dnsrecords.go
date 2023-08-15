@@ -108,7 +108,7 @@ func (r *DNSPolicyReconciler) reconcileGatewayDNSRecords(ctx context.Context, ga
 		mcgTarget := dns.NewMultiClusterGatewayTarget(gateway, clusterGateways, dnsPolicy.Spec.LoadBalancing)
 		log.Info("setting dns dnsTargets for gateway listener", "listener", dnsRecord.Name, "values", mcgTarget)
 
-		if err := r.dnsHelper.setEndpoints(ctx, mcgTarget, dnsRecord, listener); err != nil {
+		if err := r.dnsHelper.setEndpoints(ctx, gateway, mcgTarget, dnsRecord, dnsPolicy, listener); err != nil {
 			return fmt.Errorf("failed to add dns record dnsTargets %s %v", err, mcgTarget)
 		}
 	}
