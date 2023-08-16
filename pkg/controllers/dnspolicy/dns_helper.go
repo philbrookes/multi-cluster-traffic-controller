@@ -428,6 +428,7 @@ func (dh *dnsHelper) getDNSHealthCheckProbes(ctx context.Context, gateway *gatew
 	list := &v1alpha1.DNSHealthCheckProbeList{}
 	if err := dh.List(ctx, list, &client.ListOptions{
 		LabelSelector: labels.SelectorFromSet(commonDNSRecordLabels(client.ObjectKeyFromObject(gateway), client.ObjectKeyFromObject(dnsPolicy))),
+		Namespace:     gateway.Namespace,
 	}); err != nil {
 		return nil, err
 	}
