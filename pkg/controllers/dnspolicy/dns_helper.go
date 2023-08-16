@@ -3,6 +3,7 @@ package dnspolicy
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -258,18 +259,44 @@ func (dh *dnsHelper) setEndpoints(ctx context.Context, gateway *gatewayv1beta1.G
 		return err
 	}
 
+	// count will track whether an new endpoint has been removed.
+	// first newEndpoints are checked based on probe status and removed if unhealthy true and the consecutive failures are greater than the threshold.
+	removedEndpoints := 0
 	for i := 0; i < len(newEndpoints); i++ {
 		probe := dh.getProbeForEndpoint(newEndpoints[i], probes)
-		if probe != nil {
-			probeHealthy := true
-			if probe.Status.Healthy != nil {
-				probeHealthy = *probe.Status.Healthy
+		if probe == nil {
+			continue
+		}
+		probeHealthy := true
+		if probe.Status.Healthy != nil {
+			probeHealthy = *probe.Status.Healthy
+		}
+		if !probeHealthy && probe.Status.ConsecutiveFailures >= *probe.Spec.FailureThreshold {
+			newEndpoints = append(newEndpoints[:i], newEndpoints[i+1:]...)
+			removedEndpoints++
+			i--
+		}
+	}
+	// after probes are checked the newEndpoints is looped through until count is 0
+	// if any are found that need to be removed because a parent with no children present
+	// the count will be incremented so that the newEndpoints will be traversed again such that only when a loop occurs where no
+	// endpoints have been removed can we consider the endpoint list to be cleaned
+	for removedEndpoints > 0 {
+		ipPattern := `\b(?:\d{1,3}\.){3}\d{1,3}\b`
+		re := regexp.MustCompile(ipPattern)
+		for i := 0; i < len(newEndpoints); i++ {
+			checkEndpoint := newEndpoints[i]
+			if len(re.FindAllString(checkEndpoint.Targets[0], -1)) > 0 {
+				continue
 			}
-			if !probeHealthy || probe.Status.ConsecutiveFailures <= *probe.Spec.FailureThreshold {
+			children := getNumChildrenOfParent(newEndpoints, newEndpoints[i])
+			if children == 0 {
+				// removed that endpoint also but also get it's Children of Parent
 				newEndpoints = append(newEndpoints[:i], newEndpoints[i+1:]...)
-				i--
+				removedEndpoints++
 			}
 		}
+		removedEndpoints--
 	}
 
 	if len(newEndpoints) == 0 {
@@ -281,6 +308,22 @@ func (dh *dnsHelper) setEndpoints(ctx context.Context, gateway *gatewayv1beta1.G
 		return dh.Update(ctx, dnsRecord)
 	}
 	return nil
+}
+
+func getNumChildrenOfParent(endpoints []*v1alpha1.Endpoint, parent *v1alpha1.Endpoint) int {
+	return len(findChildren(endpoints, parent))
+}
+
+func findChildren(endpoints []*v1alpha1.Endpoint, parent *v1alpha1.Endpoint) []*v1alpha1.Endpoint {
+	var foundEPs []*v1alpha1.Endpoint
+	for _, endpoint := range endpoints {
+		for _, target := range parent.Targets {
+			if target == endpoint.DNSName {
+				foundEPs = append(foundEPs, endpoint)
+			}
+		}
+	}
+	return foundEPs
 }
 
 func createOrUpdateEndpoint(dnsName string, targets v1alpha1.Targets, recordType v1alpha1.DNSRecordType, setIdentifier string,
