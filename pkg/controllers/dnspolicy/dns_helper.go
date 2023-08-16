@@ -18,7 +18,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
-	"github.com/Kuadrant/multicluster-gateway-controller/pkg/_internal/metadata"
 	"github.com/Kuadrant/multicluster-gateway-controller/pkg/_internal/slice"
 	"github.com/Kuadrant/multicluster-gateway-controller/pkg/apis/v1alpha1"
 	"github.com/Kuadrant/multicluster-gateway-controller/pkg/dns"
@@ -266,7 +265,7 @@ func (dh *dnsHelper) setEndpoints(ctx context.Context, gateway *gatewayv1beta1.G
 			if probe.Status.Healthy != nil {
 				probeHealthy = *probe.Status.Healthy
 			}
-			if !probeHealthy {
+			if !probeHealthy || probe.Status.ConsecutiveFailures <= *probe.Spec.FailureThreshold {
 				newEndpoints = append(newEndpoints[:i], newEndpoints[i+1:]...)
 				i--
 			}
@@ -397,7 +396,7 @@ func (dh *dnsHelper) getDNSHealthCheckProbes(ctx context.Context, gateway *gatew
 
 func (dh *dnsHelper) getProbeForEndpoint(endpoint *v1alpha1.Endpoint, probes []*v1alpha1.DNSHealthCheckProbe) *v1alpha1.DNSHealthCheckProbe {
 	for _, probe := range probes {
-		if metadata.GetAnnotation(probe, AnnotationHealthCheckProbeEndpointName) == endpoint.DNSName {
+		if strings.Contains(probe.Name, endpoint.Targets[0]) {
 			return probe
 		}
 	}
