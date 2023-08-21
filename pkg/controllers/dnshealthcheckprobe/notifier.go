@@ -52,7 +52,7 @@ func (n StatusUpdateProbeNotifier) Notify(ctx context.Context, result health.Pro
 	if probeObj.Status.Healthy == nil {
 		probeObj.Status.Healthy = aws.Bool(true)
 	}
-	*probeObj.Status.Healthy = result.Healthy
+	probeObj.Status.Healthy = &result.Healthy
 	probeObj.Status.Reason = result.Reason
 	probeObj.Status.Status = result.Status
 
