@@ -26,7 +26,9 @@ var (
 func (r *DNSPolicyReconciler) reconcileHealthChecks(ctx context.Context, dnsPolicy *v1alpha1.DNSPolicy, gwDiffObj *reconcilers.GatewayDiff) error {
 	log := crlog.FromContext(ctx)
 
+	log.V(3).Info("reconciling health checks")
 	for _, gw := range append(gwDiffObj.GatewaysWithValidPolicyRef, gwDiffObj.GatewaysMissingPolicyRef...) {
+		log.V(3).Info("reconciling probes", "gateway", gw.Name)
 		expectedProbes, err := r.expectedProbesForGateway(ctx, gw, dnsPolicy)
 		if err != nil {
 			return fmt.Errorf("error generating probes for gateway %v: %w", gw.Gateway.Name, err)

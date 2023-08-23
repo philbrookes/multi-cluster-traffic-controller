@@ -43,11 +43,13 @@ func (r *DNSPolicyReconciler) reconcileGatewayDNSRecords(ctx context.Context, ga
 	log := crlog.FromContext(ctx)
 
 	if err := r.dnsHelper.removeDNSForDeletedListeners(ctx, gateway); err != nil {
+		log.V(3).Info("error removing DNS for deleted listeners")
 		return err
 	}
 
 	placed, err := r.Placement.GetPlacedClusters(ctx, gateway)
 	if err != nil {
+		log.V(3).Info("error getting placed clusters")
 		return err
 	}
 	clusters := placed.UnsortedList()
@@ -68,17 +70,17 @@ func (r *DNSPolicyReconciler) reconcileGatewayDNSRecords(ctx context.Context, ga
 		for _, downstreamCluster := range clusters {
 			// Only consider host for dns if there's at least 1 attached route to the listener for this host in *any* gateway
 
-			log.V(3).Info("checking downstream", "listener ", listener.Name)
+			log.V(1).Info("checking downstream", "listener ", listener.Name)
 			attached, err := r.Placement.ListenerTotalAttachedRoutes(ctx, gateway, string(listener.Name), downstreamCluster)
 			if err != nil {
 				log.Error(err, "failed to get total attached routes for listener ", "listener", listener.Name)
 				continue
 			}
 			if attached == 0 {
-				log.V(3).Info("no attached routes for ", "listener", listener.Name, "cluster ", downstreamCluster)
+				log.V(1).Info("no attached routes for ", "listener", listener.Name, "cluster ", downstreamCluster)
 				continue
 			}
-			log.V(3).Info("hostHasAttachedRoutes", "host", listener.Name, "hostHasAttachedRoutes", attached)
+			log.V(1).Info("hostHasAttachedRoutes", "host", listener.Name, "hostHasAttachedRoutes", attached)
 			cg, err := r.Placement.GetClusterGateway(ctx, gateway, downstreamCluster)
 			if err != nil {
 				return fmt.Errorf("get cluster gateway failed: %s", err)

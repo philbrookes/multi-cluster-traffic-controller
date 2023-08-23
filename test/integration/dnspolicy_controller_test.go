@@ -9,6 +9,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	v1 "open-cluster-management.io/api/work/v1"
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -712,4 +713,88 @@ var _ = Describe("DNSPolicy", Ordered, func() {
 			}, time.Second*5, time.Second).Should(HaveKeyWithValue(DNSPoliciesBackRefAnnotation, policiesBackRefValue))
 		})
 	})
+
+	Context("probes status impact DNS records", func() {
+		var gateway *gatewayv1beta1.Gateway
+		var dnsRecordName string
+		var dnsPolicy *v1alpha1.DNSPolicy
+
+		BeforeEach(func() {
+			gateway = testBuildGateway(TestPlacedGatewayName, gatewayClass.Name, TestAttachedRouteName, testNamespace)
+			dnsRecordName = fmt.Sprintf("%s-%s", TestPlacedGatewayName, TestAttachedRouteName)
+			Expect(k8sClient.Create(ctx, gateway)).To(BeNil())
+			Eventually(func() bool { //gateway exists
+				if err := k8sClient.Get(ctx, client.ObjectKey{Name: gateway.Name, Namespace: gateway.Namespace}, gateway); err != nil {
+					return false
+				}
+				return true
+			}, TestTimeoutMedium, TestRetryIntervalMedium).Should(BeTrue())
+
+			dnsPolicy = testBuildDNSPolicyWithHealthCheck("test-dns-policy", TestPlacedGatewayName, testNamespace)
+			Expect(k8sClient.Create(ctx, dnsPolicy)).To(BeNil())
+			Eventually(func() bool { //dns policy exists
+				if err := k8sClient.Get(ctx, client.ObjectKey{Name: dnsPolicy.Name, Namespace: dnsPolicy.Namespace}, dnsPolicy); err != nil {
+					return false
+				}
+				return true
+			}, TestTimeoutMedium, TestRetryIntervalMedium).Should(BeTrue())
+		})
+
+		AfterEach(func() {
+			//clean up gateways
+
+			//clean up policy
+
+			//clean up probes
+
+			//clean up dns records
+		})
+
+		Context("all probes healthy", func() {
+			It("should create a dns record", func() {
+				createdDNSRecord := &v1alpha1.DNSRecord{}
+
+				Eventually(func() bool { // DNS record exists
+					if err := k8sClient.Get(ctx, client.ObjectKey{Name: dnsRecordName, Namespace: testNamespace}, createdDNSRecord); err != nil {
+						return false
+					}
+					return len(createdDNSRecord.Spec.Endpoints) == 4
+				}, TestTimeoutMedium, TestRetryIntervalMedium).Should(BeTrue())
+				Expect(createdDNSRecord.Spec.ManagedZoneRef.Name).To(Equal("example.com"))
+			})
+			It("should have probes that are healthy", func() {
+				mwList := &v1.ManifestWorkList{}
+				Expect(k8sClient.List(ctx, mwList, &client.ListOptions{})).To(BeNil())
+
+				for _, mw := range mwList.Items {
+					fmt.Fprintf(GinkgoWriter, "found manifest work: %v/%v\n", mw.Namespace, mw.Name)
+				}
+
+				Eventually(func() bool {
+					probeList := &v1alpha1.DNSHealthCheckProbeList{}
+					Expect(k8sClient.List(ctx, probeList, &client.ListOptions{})).To(BeNil())
+					for _, probe := range probeList.Items {
+						fmt.Fprintf(GinkgoWriter, "got probe (%v/%v), with status: %+v\n", probe.Name, probe.Namespace, probe.Status)
+					}
+					fmt.Fprint(GinkgoWriter, "---> end of loop\n")
+					return false
+				}, TestTimeoutMedium, TestRetryIntervalMedium).Should(BeTrue())
+			})
+			It("should have all endpoints in the DNS Record", func() {
+				createdDNSRecord := &v1alpha1.DNSRecord{}
+				Expect(k8sClient.Get(ctx, client.ObjectKey{Name: dnsRecordName, Namespace: testNamespace}, createdDNSRecord)).To(BeNil())
+			})
+		})
+		Context("all unhealthy probes", func() {
+			It("should publish all dns records", func() {
+
+			})
+		})
+		Context("partial unhealthy probes", func() {
+			It("should only publish healthy dns records", func() {
+
+			})
+		})
+	})
+
 })

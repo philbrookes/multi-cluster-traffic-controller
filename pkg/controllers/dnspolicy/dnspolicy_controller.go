@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/kuadrant/authorino/pkg/log"
 	clusterv1 "open-cluster-management.io/api/cluster/v1"
 
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -75,6 +76,7 @@ func (r *DNSPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	previous := &v1alpha1.DNSPolicy{}
 	if err := r.Client().Get(ctx, req.NamespacedName, previous); err != nil {
+		log.Info("error getting dns policy", "error", err)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -142,6 +144,7 @@ func (r *DNSPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 }
 
 func (r *DNSPolicyReconciler) reconcileResources(ctx context.Context, dnsPolicy *v1alpha1.DNSPolicy, targetNetworkObject client.Object) error {
+	log := crlog.FromContext(ctx)
 	// validate
 	err := dnsPolicy.Validate()
 	if err != nil {
@@ -155,6 +158,7 @@ func (r *DNSPolicyReconciler) reconcileResources(ctx context.Context, dnsPolicy 
 	}
 
 	if err := r.reconcileDNSRecords(ctx, dnsPolicy, gatewayDiffObj); err != nil {
+		log.V(3).Info("error reconciling DNS records from reconcile, returning", "error", err)
 		return err
 	}
 
@@ -180,6 +184,7 @@ func (r *DNSPolicyReconciler) deleteResources(ctx context.Context, dnsPolicy *v1
 	}
 
 	if err := r.reconcileDNSRecords(ctx, dnsPolicy, gatewayDiffObj); err != nil {
+		log.V(3).Info("error reconciling DNS records from delete, returning", "error", err)
 		return err
 	}
 

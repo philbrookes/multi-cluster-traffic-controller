@@ -259,7 +259,7 @@ func (dh *dnsHelper) setEndpoints(ctx context.Context, gateway *gatewayv1beta1.G
 		return err
 	}
 
-	// count will track whether an new endpoint has been removed.
+	// count will track whether a new endpoint has been removed.
 	// first newEndpoints are checked based on probe status and removed if unhealthy true and the consecutive failures are greater than the threshold.
 	removedEndpoints := 0
 	for i := 0; i < len(newEndpoints); i++ {
