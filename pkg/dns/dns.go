@@ -21,6 +21,8 @@ import (
 	"errors"
 	"regexp"
 
+	"k8s.io/utils/net"
+
 	"github.com/Kuadrant/multicluster-gateway-controller/pkg/apis/v1alpha1"
 )
 
@@ -30,6 +32,33 @@ const (
 	ProviderSpecificWeight  = "weight"
 	ProviderSpecificGeoCode = "geo-code"
 )
+
+func EnsureTerminatingDot(host string) string {
+	if host == "" {
+		return host
+	}
+	if net.IsIPv4String(host) {
+		return host
+	}
+	if string(host[len(host)-1]) == "." {
+		return host
+	}
+
+	return host + "."
+}
+
+func RemoveTerminatingDot(host string) string {
+	if host == "" {
+		return host
+	}
+	if net.IsIPv4String(host) {
+		return host
+	}
+	if string(host[len(host)-1]) != "." {
+		return host
+	}
+	return host[:len(host)-1]
+}
 
 type DNSProviderFactory func(ctx context.Context, managedZone *v1alpha1.ManagedZone) (Provider, error)
 
@@ -52,6 +81,8 @@ type Provider interface {
 	HealthCheckReconciler() HealthCheckReconciler
 
 	ProviderSpecific() ProviderSpecificLabels
+
+	ListDNSRecords(managedZone *v1alpha1.ManagedZone) ([]*v1alpha1.DNSRecord, error)
 }
 
 type ProviderSpecificLabels struct {
@@ -82,6 +113,9 @@ func (*FakeProvider) DeleteManagedZone(managedZone *v1alpha1.ManagedZone) error 
 
 func (*FakeProvider) HealthCheckReconciler() HealthCheckReconciler {
 	return &FakeHealthCheckReconciler{}
+}
+func (*FakeProvider) ListDNSRecords(managedZone *v1alpha1.ManagedZone) ([]*v1alpha1.DNSRecord, error) {
+	return []*v1alpha1.DNSRecord{}, nil
 }
 func (*FakeProvider) ProviderSpecific() ProviderSpecificLabels {
 	return ProviderSpecificLabels{

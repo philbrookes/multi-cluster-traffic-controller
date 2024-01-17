@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
 
 	clusterv1 "open-cluster-management.io/api/cluster/v1"
 
@@ -61,6 +62,7 @@ type DNSPolicyReconciler struct {
 	reconcilers.TargetRefReconciler
 	DNSProvider dns.DNSProviderFactory
 	dnsHelper   dnsHelper
+	ClusterID   string
 }
 
 //+kubebuilder:rbac:groups=kuadrant.io,resources=dnspolicies,verbs=get;list;watch;update;patch;delete
@@ -134,6 +136,8 @@ func (r *DNSPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, specErr
 	}
 
+	statusResult.Requeue = true
+	statusResult.RequeueAfter = time.Second * 20
 	return statusResult, statusErr
 }
 
@@ -154,17 +158,77 @@ func (r *DNSPolicyReconciler) reconcileResources(ctx context.Context, dnsPolicy 
 		return err
 	}
 
+	mzs := &v1alpha1.ManagedZoneList{}
+	err = r.Client().List(ctx, mzs, &client.ListOptions{})
+	if err != nil {
+		return err
+	}
+	// update DNS Records for zone
+	for _, mz := range mzs.Items {
+		provider, err := r.DNSProvider(ctx, &mz)
+		if err != nil {
+			r.Logger().Info("error loading dns provider", "managed zone", mz)
+			continue
+		}
+		dnsRecords, err := provider.ListDNSRecords(&mz)
+		if err != nil {
+			return err
+		}
+		for _, providerDnsRecord := range dnsRecords {
+			//find a gateway using this host
+			gwList := &gatewayapiv1.GatewayList{}
+			err = r.Client().List(ctx, gwList, &client.ListOptions{Namespace: dnsPolicy.Namespace})
+			if err != nil {
+				return err
+			}
+			gwFound := false
+			for _, gw := range gwList.Items {
+				for _, l := range gw.Spec.Listeners {
+					if string(*l.Hostname) == providerDnsRecord.Name {
+						gwFound = true
+						providerDnsRecord.Name = dnsRecordName(gw.Name, string(l.Name))
+					}
+				}
+			}
+			//don't make DNS Records for unused hosts
+			if !gwFound {
+				r.Logger().Info("no gateway found for host", "host", providerDnsRecord.Name)
+				continue
+			}
+			r.Logger().Info("creating DNS Record", "name", providerDnsRecord.Name)
+			clusterDnsRecord := &v1alpha1.DNSRecord{}
+			err := r.Client().Get(ctx, client.ObjectKeyFromObject(providerDnsRecord), clusterDnsRecord)
+			if client.IgnoreNotFound(err) != nil {
+				return err
+			}
+			if apierrors.IsNotFound(err) {
+				err = r.Client().Create(ctx, providerDnsRecord)
+				if err != nil {
+					return err
+				}
+			} else if !reflect.DeepEqual(clusterDnsRecord.Spec, providerDnsRecord.Spec) {
+				patch := client.MergeFrom(clusterDnsRecord.DeepCopy())
+				clusterDnsRecord.Spec = providerDnsRecord.Spec
+				err = r.Client().Patch(ctx, clusterDnsRecord, patch)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	r.Logger().Info("reconciling DNS Records", "DNS Policy", dnsPolicy)
 	if err = r.reconcileDNSRecords(ctx, dnsPolicy, gatewayDiffObj); err != nil {
 		gatewayCondition = conditions.BuildPolicyAffectedCondition(DNSPolicyAffected, dnsPolicy, targetNetworkObject, conditions.PolicyReasonInvalid, err)
 		updateErr := r.updateGatewayCondition(ctx, gatewayCondition, gatewayDiffObj)
 		return errors.Join(fmt.Errorf("reconcile DNSRecords error %w", err), updateErr)
 	}
 
-	if err = r.reconcileHealthCheckProbes(ctx, dnsPolicy, gatewayDiffObj); err != nil {
-		gatewayCondition = conditions.BuildPolicyAffectedCondition(DNSPolicyAffected, dnsPolicy, targetNetworkObject, conditions.PolicyReasonInvalid, err)
-		updateErr := r.updateGatewayCondition(ctx, gatewayCondition, gatewayDiffObj)
-		return errors.Join(fmt.Errorf("reconcile HealthChecks error %w", err), updateErr)
-	}
+	//if err = r.reconcileHealthCheckProbes(ctx, dnsPolicy, gatewayDiffObj); err != nil {
+	//	gatewayCondition = conditions.BuildPolicyAffectedCondition(DNSPolicyAffected, dnsPolicy, targetNetworkObject, conditions.PolicyReasonInvalid, err)
+	//	updateErr := r.updateGatewayCondition(ctx, gatewayCondition, gatewayDiffObj)
+	//	return errors.Join(fmt.Errorf("reconcile HealthChecks error %w", err), updateErr)
+	//}
 
 	// set direct back ref - i.e. claim the target network object as taken asap
 	if err = r.ReconcileTargetBackReference(ctx, client.ObjectKeyFromObject(dnsPolicy), targetNetworkObject, DNSPolicyBackRefAnnotation); err != nil {

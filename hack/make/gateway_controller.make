@@ -2,6 +2,21 @@
 
 CONTROLLER_IMG ?= controller:$(TAG)
 LOG_LEVEL ?= 3
+CLUSTER_ID ?= cluster
+METRICS_ADDRESS ?= :8080
+HEALTH_ADDRESS ?= :8081
+
+.PHONY: build-dns-controller
+build-dns-controller: manifests generate fmt vet ## Build controller binary.
+	go build -o bin/dns_controller ./cmd/dns_controller/main.go
+	
+.PHONY: run-dns-controller
+run-dns-controller: manifests generate fmt vet  install
+	go run ./cmd/dns_controller/main.go \
+	    --metrics-bind-address=${METRICS_ADDRESS} \
+	    --health-probe-bind-address=${HEALTH_ADDRESS} \
+	    --zap-log-level=$(LOG_LEVEL) \
+	    --cluster-id=$(CLUSTER_ID)
 
 .PHONY: build-gateway-controller
 build-gateway-controller: manifests generate fmt vet ## Build controller binary.

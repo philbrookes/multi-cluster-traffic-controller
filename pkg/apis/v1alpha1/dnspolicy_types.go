@@ -30,6 +30,7 @@ type RoutingStrategy string
 const (
 	SimpleRoutingStrategy       RoutingStrategy = "simple"
 	LoadBalancedRoutingStrategy RoutingStrategy = "loadbalanced"
+	ShardRoutingStrategy        RoutingStrategy = "shard"
 )
 
 // DNSPolicySpec defines the desired state of DNSPolicy
@@ -46,7 +47,7 @@ type DNSPolicySpec struct {
 	LoadBalancing *LoadBalancingSpec `json:"loadBalancing"`
 
 	// +required
-	// +kubebuilder:validation:Enum=simple;loadbalanced
+	// +kubebuilder:validation:Enum=simple;loadbalanced;shard
 	// +kubebuilder:default=loadbalanced
 	RoutingStrategy RoutingStrategy `json:"routingStrategy"`
 }

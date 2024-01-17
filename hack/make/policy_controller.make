@@ -25,7 +25,7 @@ run-policy-controller: manifests generate fmt vet  install
 	    --health-probe-bind-address=:8091 \
 	    --zap-log-level=$(LOG_LEVEL) \
 		--ocm-hub=$(OCM)
-
+		
 .PHONY: docker-build-policy-controller
 docker-build-policy-controller: ## Build docker image with the controller.
 	docker build --target policy-controller -t ${POLICY_CONTROLLER_IMG} .

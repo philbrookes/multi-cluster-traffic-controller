@@ -18,6 +18,7 @@ package aws
 
 import (
 	"fmt"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/go-logr/logr"
 
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -97,6 +99,135 @@ func (p *Route53DNSProvider) Ensure(record *v1alpha1.DNSRecord, managedZone *v1a
 
 func (p *Route53DNSProvider) Delete(record *v1alpha1.DNSRecord, managedZone *v1alpha1.ManagedZone) error {
 	return p.change(record, managedZone, deleteAction)
+}
+
+type dnsNode struct {
+	host       string
+	references []dnsNode
+}
+
+func (p *Route53DNSProvider) ListDNSRecords(managedZone *v1alpha1.ManagedZone) ([]*v1alpha1.DNSRecord, error) {
+	var zoneID string
+	if managedZone.Spec.ID != "" {
+		zoneID = managedZone.Spec.ID
+	} else {
+		zoneID = managedZone.Status.ID
+	}
+
+	output, err := p.client.ListRecordSets(&route53.ListResourceRecordSetsInput{
+		HostedZoneId: &zoneID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// build a map of all records: map[host]records
+	keyedRecords := map[string][]*route53.ResourceRecordSet{}
+	for _, record := range output.ResourceRecordSets {
+		//skip obviously irrelevant records
+		if *record.Type == "NS" || *record.Type == "SOA" {
+			continue
+		}
+		name := *record.Name
+		name = dns.RemoveTerminatingDot(*record.Name)
+		keyedRecords[name] = append(keyedRecords[name], record)
+	}
+
+	//find all records that are a host not referenced by other records (e.g. root records)
+	roots := map[string][]*route53.ResourceRecordSet{}
+	for name, nameRecord := range keyedRecords {
+		if isRootRecord(name, keyedRecords) {
+			log.Log.Info("found a root", "host", name)
+			roots[name] = nameRecord
+		}
+	}
+
+	//for each root record, construct a DNS Record
+	var dnsRecords []*v1alpha1.DNSRecord
+	for name, targets := range roots {
+		dnsRecord := &v1alpha1.DNSRecord{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: managedZone.Namespace,
+			},
+			Spec: v1alpha1.DNSRecordSpec{
+				ManagedZoneRef: &v1alpha1.ManagedZoneReference{Name: managedZone.Name},
+				Endpoints:      nil,
+			},
+		}
+
+		//add the root endpoint and all of its targets to the DNS Record
+		for _, t := range targets {
+			addRecordToDNS(dnsRecord, t)
+		}
+
+		//find all the child records and add them to the record
+		addChildrenToDNS(dnsRecord, keyedRecords)
+
+		log.Log.Info("assembled DNS Record from Route53", "dns record", dnsRecord)
+		//add to resulting CRs
+		dnsRecords = append(dnsRecords, dnsRecord)
+	}
+
+	return dnsRecords, nil
+}
+
+func addChildrenToDNS(dnsRecord *v1alpha1.DNSRecord, keyedRecords map[string][]*route53.ResourceRecordSet) {
+
+	//keep looking until no required changes can be found
+	updated := true
+	for updated {
+		updated = false
+
+		for _, endpoint := range dnsRecord.Spec.Endpoints {
+			for _, target := range endpoint.Targets {
+				for _, child := range keyedRecords[target] {
+					added := addRecordToDNS(dnsRecord, child)
+					if added == true {
+						updated = true
+					}
+				}
+			}
+		}
+	}
+}
+
+func addRecordToDNS(dnsRecord *v1alpha1.DNSRecord, record *route53.ResourceRecordSet) bool {
+	targets := v1alpha1.Targets{}
+	for _, r := range record.ResourceRecords {
+		targets = append(targets, dns.RemoveTerminatingDot(*r.Value))
+	}
+	//don't add if it already exists
+	for _, e := range dnsRecord.Spec.Endpoints {
+		if e.DNSName == dns.RemoveTerminatingDot(*record.Name) && reflect.DeepEqual(targets, e.Targets) {
+			return false
+		}
+	}
+	dnsRecord.Spec.Endpoints = append(dnsRecord.Spec.Endpoints, &v1alpha1.Endpoint{
+		DNSName:          dns.RemoveTerminatingDot(*record.Name),
+		Targets:          targets,
+		RecordType:       *record.Type,
+		SetIdentifier:    "",
+		RecordTTL:        v1alpha1.TTL(*record.TTL),
+		Labels:           nil,
+		ProviderSpecific: nil,
+	})
+	return true
+}
+func isRootRecord(name string, records map[string][]*route53.ResourceRecordSet) bool {
+	log.Log.Info("testing for root", "host", name)
+	for _, recs := range records {
+		for _, record := range recs {
+			for _, value := range record.ResourceRecords {
+				log.Log.Info("testing for root", "host", name, "value", *value.Value)
+				if name == *value.Value {
+					//name is not a root record
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 func (p *Route53DNSProvider) EnsureManagedZone(zone *v1alpha1.ManagedZone) (dns.ManagedZoneOutput, error) {

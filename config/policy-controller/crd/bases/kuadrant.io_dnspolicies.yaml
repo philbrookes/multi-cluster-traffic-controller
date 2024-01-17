@@ -160,6 +160,7 @@ spec:
                 enum:
                 - simple
                 - loadbalanced
+                - shard
                 type: string
               targetRef:
                 description: PolicyTargetReference identifies an API object to apply

@@ -23,12 +23,12 @@ func (r *DNSPolicyReconciler) reconcileDNSRecords(ctx context.Context, dnsPolicy
 	log := crlog.FromContext(ctx)
 
 	log.V(3).Info("reconciling dns records")
-	for _, gw := range gwDiffObj.GatewaysWithInvalidPolicyRef {
-		log.V(1).Info("reconcileDNSRecords: gateway with invalid policy ref", "key", gw.Key())
-		if err := r.deleteGatewayDNSRecords(ctx, gw.Gateway, dnsPolicy); err != nil {
-			return fmt.Errorf("error deleting dns records for gw %v: %w", gw.Gateway.Name, err)
-		}
-	}
+	//for _, gw := range gwDiffObj.GatewaysWithInvalidPolicyRef {
+	//	log.V(1).Info("reconcileDNSRecords: gateway with invalid policy ref", "key", gw.Key())
+	//	if err := r.deleteGatewayDNSRecords(ctx, gw.Gateway, dnsPolicy); err != nil {
+	//		return fmt.Errorf("error deleting dns records for gw %v: %w", gw.Gateway.Name, err)
+	//	}
+	//}
 
 	// Reconcile DNSRecords for each gateway directly referred by the policy (existing and new)
 	for _, gw := range append(gwDiffObj.GatewaysWithValidPolicyRef, gwDiffObj.GatewaysMissingPolicyRef...) {
@@ -47,11 +47,11 @@ func (r *DNSPolicyReconciler) reconcileGatewayDNSRecords(ctx context.Context, gw
 	if err := gatewayWrapper.Validate(); err != nil {
 		return err
 	}
-
-	if err := r.dnsHelper.removeDNSForDeletedListeners(ctx, gatewayWrapper.Gateway); err != nil {
-		log.V(3).Info("error removing DNS for deleted listeners")
-		return err
-	}
+	//
+	//if err := r.dnsHelper.removeDNSForDeletedListeners(ctx, gatewayWrapper.Gateway); err != nil {
+	//	log.V(3).Info("error removing DNS for deleted listeners")
+	//	return err
+	//}
 
 	clusterGatewayAddresses := gatewayWrapper.GetClusterGatewayAddresses()
 
@@ -90,12 +90,13 @@ func (r *DNSPolicyReconciler) reconcileGatewayDNSRecords(ctx context.Context, gw
 
 		if len(clusterGateways) == 0 {
 			// delete record
-			log.V(3).Info("no cluster gateways, deleting DNS record", " for listener ", listener.Name)
-			if err := r.dnsHelper.deleteDNSRecordForListener(ctx, gatewayWrapper, listener); client.IgnoreNotFound(err) != nil {
-				return fmt.Errorf("failed to delete dns record for listener %s : %s", listener.Name, err)
-			}
+			//log.V(3).Info("no cluster gateways, deleting DNS record", " for listener ", listener.Name)
+			//if err := r.dnsHelper.deleteDNSRecordForListener(ctx, gatewayWrapper, listener); client.IgnoreNotFound(err) != nil {
+			//	return fmt.Errorf("failed to delete dns record for listener %s : %s", listener.Name, err)
+			//}
 			return nil
 		}
+
 		dnsRecord, err := r.dnsHelper.createDNSRecordForListener(ctx, gatewayWrapper.Gateway, dnsPolicy, mz, listener)
 		if err := client.IgnoreAlreadyExists(err); err != nil {
 			return fmt.Errorf("failed to create dns record for listener host %s : %s ", *listener.Hostname, err)
@@ -111,14 +112,14 @@ func (r *DNSPolicyReconciler) reconcileGatewayDNSRecords(ctx context.Context, gw
 		if err != nil {
 			return fmt.Errorf("failed to create multi cluster gateway target for listener %s : %s ", listener.Name, err)
 		}
-
-		log.Info("setting dns dnsTargets for gateway listener", "listener", dnsRecord.Name, "values", mcgTarget)
-		probes, err := r.dnsHelper.getDNSHealthCheckProbes(ctx, mcgTarget.Gateway, dnsPolicy)
-		if err != nil {
-			return err
-		}
-		mcgTarget.RemoveUnhealthyGatewayAddresses(probes, listener)
-		if err := r.dnsHelper.setEndpoints(ctx, mcgTarget, dnsRecord, listener, dnsPolicy.Spec.RoutingStrategy); err != nil {
+		//
+		//log.Info("setting dns dnsTargets for gateway listener", "listener", dnsRecord.Name, "values", mcgTarget)
+		//probes, err := r.dnsHelper.getDNSHealthCheckProbes(ctx, mcgTarget.Gateway, dnsPolicy)
+		//if err != nil {
+		//	return err
+		//}
+		//mcgTarget.RemoveUnhealthyGatewayAddresses(probes, listener)
+		if err := r.dnsHelper.setEndpoints(ctx, mcgTarget, dnsRecord, listener, dnsPolicy.Spec.RoutingStrategy, r.ClusterID); err != nil {
 			return fmt.Errorf("failed to add dns record dnsTargets %s %v", err, mcgTarget)
 		}
 	}

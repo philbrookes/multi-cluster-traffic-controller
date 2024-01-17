@@ -3,6 +3,7 @@ package dnspolicy
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -146,7 +147,7 @@ func withGatewayListener[T metav1.Object](gateway common.GatewayWrapper, listene
 	return obj
 }
 
-func (dh *dnsHelper) setEndpoints(ctx context.Context, mcgTarget *dns.MultiClusterGatewayTarget, dnsRecord *v1alpha1.DNSRecord, listener gatewayapiv1.Listener, strategy v1alpha1.RoutingStrategy) error {
+func (dh *dnsHelper) setEndpoints(ctx context.Context, mcgTarget *dns.MultiClusterGatewayTarget, dnsRecord *v1alpha1.DNSRecord, listener gatewayapiv1.Listener, strategy v1alpha1.RoutingStrategy, clusterID string) error {
 	old := dnsRecord.DeepCopy()
 	gwListenerHost := string(*listener.Hostname)
 	var endpoints []*v1alpha1.Endpoint
@@ -157,11 +158,14 @@ func (dh *dnsHelper) setEndpoints(ctx context.Context, mcgTarget *dns.MultiClust
 		currentEndpoints[endpoint.SetID()] = endpoint
 	}
 
+	log.Log.V(1).Info("getting endpoints", "strategy", strategy)
 	switch strategy {
 	case v1alpha1.SimpleRoutingStrategy:
 		endpoints = dh.getSimpleEndpoints(mcgTarget, gwListenerHost, currentEndpoints)
 	case v1alpha1.LoadBalancedRoutingStrategy:
 		endpoints = dh.getLoadBalancedEndpoints(mcgTarget, gwListenerHost, currentEndpoints)
+	case v1alpha1.ShardRoutingStrategy:
+		endpoints = dh.getShardEndpoints(mcgTarget, gwListenerHost, currentEndpoints, clusterID)
 	default:
 		return fmt.Errorf("%w : %s", ErrUnknownRoutingStrategy, strategy)
 	}
@@ -210,6 +214,122 @@ func (dh *dnsHelper) getSimpleEndpoints(mcgTarget *dns.MultiClusterGatewayTarget
 		endpoints = append(endpoints, endpoint)
 	}
 
+	return endpoints
+}
+
+// getShardEndpoints will return all the current endpoints with only the endpoints for
+// the current shard (and it's path back to the endpoint) modified / ensured
+func (dh *dnsHelper) getShardEndpoints(mcgTarget *dns.MultiClusterGatewayTarget, hostname string, currentEndpoints map[string]*v1alpha1.Endpoint, clusterID string) []*v1alpha1.Endpoint {
+	var (
+		cleanedEndpoints map[string]*v1alpha1.Endpoint
+		endpoints        []*v1alpha1.Endpoint
+		endpoint         *v1alpha1.Endpoint
+		defaultEndpoint  *v1alpha1.Endpoint
+	)
+
+	cleanedEndpoints = map[string]*v1alpha1.Endpoint{}
+	l := log.Log.V(1).Info
+
+	l("getShardEndpoints", "current", currentEndpoints)
+	cnameHost := hostname
+	if isWildCardHost(hostname) {
+		cnameHost = strings.Replace(hostname, "*.", "", -1)
+	}
+	lbName := strings.ToLower(fmt.Sprintf("lb-%s.%s", mcgTarget.GetShortCode(), cnameHost))
+
+	//remove all cleanedEndpoints and targets with this cluster ID
+	for k, endpoint := range currentEndpoints {
+		if strings.Contains(endpoint.DNSName, clusterID) {
+			continue
+		}
+		newTargets := v1alpha1.Targets{}
+		for _, t := range endpoint.Targets {
+			if !strings.Contains(t, clusterID) {
+				newTargets = append(newTargets, t)
+			}
+		}
+		endpoint.Targets = newTargets
+		cleanedEndpoints[k] = endpoint
+	}
+
+	log.Log.Info("cleaned cleanedEndpoints", "cleanedEndpoints", cleanedEndpoints)
+
+	log.Log.Info("generating endpoints", "mcgTarget.GroupTargetsByGeo", mcgTarget.GroupTargetsByGeo())
+	for geoCode, cgwTargets := range mcgTarget.GroupTargetsByGeo() {
+		geoLbName := strings.ToLower(fmt.Sprintf("%s.%s", geoCode, lbName))
+		var clusterEndpoints []*v1alpha1.Endpoint
+		for _, cgwTarget := range cgwTargets {
+			var ipValues []string
+			var hostValues []string
+			for _, gwa := range cgwTarget.GatewayAddresses {
+				if *gwa.Type == gatewayapiv1.IPAddressType {
+					ipValues = append(ipValues, gwa.Value)
+				} else {
+					hostValues = append(hostValues, gwa.Value)
+				}
+			}
+
+			if len(ipValues) > 0 {
+				clusterLbName := strings.ToLower(fmt.Sprintf("%s-%s.%s", cgwTarget.GetShortCode(), clusterID, lbName))
+				endpoint = createOrUpdateEndpoint(clusterLbName, ipValues, v1alpha1.ARecordType, "", dns.DefaultTTL, cleanedEndpoints)
+				clusterEndpoints = append(clusterEndpoints, endpoint)
+				hostValues = append(hostValues, clusterLbName)
+			}
+
+			for _, hostValue := range hostValues {
+				endpoint = createOrUpdateEndpoint(geoLbName, []string{hostValue}, v1alpha1.CNAMERecordType, hostValue, dns.DefaultTTL, cleanedEndpoints)
+				endpoint.SetProviderSpecific(dns.ProviderSpecificWeight, strconv.Itoa(cgwTarget.GetWeight()))
+				clusterEndpoints = append(clusterEndpoints, endpoint)
+			}
+		}
+		if len(clusterEndpoints) == 0 {
+			log.Log.Info("no cluster endpoints, skipping")
+			continue
+		}
+		endpoints = appendIfAbsent(endpoints, clusterEndpoints...)
+
+		//Create lbName CNAME (lb-a1b2.shop.example.com -> default.lb-a1b2.shop.example.com)
+		endpoint = createOrUpdateEndpoint(lbName, []string{geoLbName}, v1alpha1.CNAMERecordType, string(geoCode), dns.DefaultCnameTTL, cleanedEndpoints)
+
+		//Deal with the default geo endpoint first
+		if geoCode.IsDefaultCode() {
+			defaultEndpoint = endpoint
+			// continue here as we will add the `defaultEndpoint` later
+			continue
+		} else if (geoCode == mcgTarget.GetDefaultGeo()) || defaultEndpoint == nil {
+			// Ensure that a `defaultEndpoint` is always set, but the expected default takes precedence
+			defaultEndpoint = createOrUpdateEndpoint(lbName, []string{geoLbName}, v1alpha1.CNAMERecordType, "default", dns.DefaultCnameTTL, cleanedEndpoints)
+		}
+
+		endpoint.SetProviderSpecific(dns.ProviderSpecificGeoCode, string(geoCode))
+
+		endpoints = appendIfAbsent(endpoints, endpoint)
+	}
+
+	if len(endpoints) > 0 {
+		// Add the `defaultEndpoint`, this should always be set by this point if `cleanedEndpoints` isn't empty
+		defaultEndpoint.SetProviderSpecific(dns.ProviderSpecificGeoCode, string(dns.WildcardGeo))
+		endpoints = appendIfAbsent(endpoints, defaultEndpoint)
+		//Create gwListenerHost CNAME (shop.example.com -> lb-a1b2.shop.example.com)
+		endpoint = createOrUpdateEndpoint(hostname, []string{lbName}, v1alpha1.CNAMERecordType, "", dns.DefaultCnameTTL, cleanedEndpoints)
+		endpoints = appendIfAbsent(endpoints, endpoint)
+	}
+
+	log.Log.Info("built DNS Record", "endpoints", endpoints)
+	return endpoints
+}
+
+func appendIfAbsent(endpoints []*v1alpha1.Endpoint, endpointCandidates ...*v1alpha1.Endpoint) []*v1alpha1.Endpoint {
+NextCandidate:
+	for _, newEndpointCandidate := range endpointCandidates {
+		newEndpointCandidate.DNSName = dns.RemoveTerminatingDot(newEndpointCandidate.DNSName)
+		for _, e := range endpoints {
+			if reflect.DeepEqual(e, newEndpointCandidate) {
+				continue NextCandidate
+			}
+		}
+		endpoints = append(endpoints, newEndpointCandidate)
+	}
 	return endpoints
 }
 

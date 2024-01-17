@@ -53,6 +53,14 @@ func observe(operation string, f func() error) {
 	route53RequestTotal.WithLabelValues(operation, code).Inc()
 }
 
+func (c *InstrumentedRoute53) ListRecordSets(input *route53.ListResourceRecordSetsInput) (output *route53.ListResourceRecordSetsOutput, err error) {
+	observe("ListResourceRecordSets", func() error {
+		output, err = c.route53.ListResourceRecordSets(input)
+		return err
+	})
+	return
+}
+
 func (c *InstrumentedRoute53) ListHostedZones(input *route53.ListHostedZonesInput) (output *route53.ListHostedZonesOutput, err error) {
 	observe("ListHostedZones", func() error {
 		output, err = c.route53.ListHostedZones(input)
